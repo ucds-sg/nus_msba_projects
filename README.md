@@ -1,0 +1,2 @@
+# nus_msba_projects
+Some projects from the NUS MSBA course. These projects contain specifically a project on NLP/NLG wherein we leverage NLP on certain corpus of data and understand how to generate text in a similar fashion (D2E NLG problem), look at the final OR project, Advanced Machine learning notes and project which involved tagging multiple objects using a CNN in an image in order to verify the authenticity of an image uploaded on any platform.
