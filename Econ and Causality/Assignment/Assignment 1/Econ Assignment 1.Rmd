@@ -1,0 +1,436 @@
+---
+title: "Economics Assignment 1 - Estimating Demand Curve"
+output:
+  html_notebook:
+    number_sections: yes
+    theme: cerulean
+    toc: yes
+    toc_float: yes
+  html_document:
+    toc: yes
+---
+
+> Assumptions:
+1. The sales data has tickets sold to multiple locations across multiple classes of tickets
+2. The mean price calculated is a function of the passenger manifesto as well (i.e. a booking can include a combination of adults + children + elderly etc.)
+
+# Reading Data & Libraries
+
+```{r Loading Libraries & Data, echo=FALSE, message=FALSE, warning=FALSE}
+
+## Reading data
+
+#Specifying location - please change it to relevant directory
+Location <-
+  "C:/Users/utkar/Desktop/MSBA/Lecture/DSC5101 - Analytics in Managerial Econ/Assignment"
+#Loading data
+Data <-
+  read.csv(paste0(Location, "/Project1Data.csv"), stringsAsFactors = F)
+
+## Installing library
+
+# check.packages function: install and load multiple R packages.
+# Check to see if packages are installed. Install them if they are not, then load them into the R session.
+
+check.packages <- function(pkg){
+  new.pkg <- pkg[!(pkg %in% installed.packages()[, "Package"])]
+  if (length(new.pkg)) 
+    install.packages(new.pkg, dependencies = TRUE)
+  sapply(pkg, require, character.only = TRUE)
+}
+
+# Usage example
+packages<-c("ggplot2","dplyr", "AER", "ggcorrplot","caret", "mltools","data.table")
+check.packages(packages)
+
+library(dplyr)
+library(ggplot2)
+library(AER)
+library(ggcorrplot)
+library(mltools)
+library(data.table)
+
+cat("View of dataset: \n")
+print(head(Data))
+```
+
+# Data Exploration & Manipulation
+
+```{r Data Exploration,echo=FALSE, message=FALSE, warning=FALSE}
+
+##### Data Cleaning ####
+
+## Checking for NULL values
+cat("Null values present in data: \n")
+print(sapply(Data, function(x) sum(is.na(x))))
+# No NA's found
+
+## Checking for duplicate rows - 
+## creating flag for all values that occur more than once
+
+Duplicate_data <- Data[!unique(Data),] # Dataset with duplicate rows
+
+Data$DuplicateFlag <- as.numeric(paste0(Data$dtd,
+                                        Data$num_bookings,
+                                        Data$mean_net_ticket_price,
+                                        Data$inv) %in% 
+                                   paste0(Duplicate_data$dtd,
+                                          Duplicate_data$num_bookings,
+                                          Duplicate_data$mean_net_ticket_price,
+                                          Duplicate_data$inv)
+)
+
+## Checking if any days are missing from dataset:
+
+#max(Data$dtd) == length(unique(Data$dtd))
+# Result: FALSE - some days are missing from data
+
+## Identifying missing days
+dtd_new <- as.data.frame(0:360)
+colnames(dtd_new) = c("dtd_new")
+
+Cleaned_Data <- merge(x = dtd_new, y = Data,by.x = "dtd_new", by.y = "dtd", all.x = T, all.y = F)
+
+##### Data Exploration ####
+
+## Days on which no data is present
+cat("Days on which no booking is made: \n")
+print(Cleaned_Data[(is.na(Cleaned_Data$num_bookings)),]$dtd_new)
+# 254 282 312 337 338 339 340 344 345 346 347 348 350, 355-360: dtd's which do not have any ticket sales
+```
+
+```{r Chunk of code done before some clarifications by TA,echo=FALSE, message=FALSE, warning=FALSE}
+
+## COMMENTING THIS SECTION OUT AFTER CLARIFICATIONS FROM TA: ####
+
+## Creating column with Boolean output which compares num_Booking & inv:
+## Done to find the exact number of variety of tickets sold. Assumption: Inv column is 1 when 1st booking is done
+
+# Cleaned_Data$TrainServiceIdentifier <- ifelse(Cleaned_Data$num_bookings==Cleaned_Data$inv,TRUE,FALSE)
+# 
+# ## Summary of data & columns created
+# summary(Cleaned_Data)
+# 
+# ## Checking number of services across days
+# NoOfService <- Cleaned_Data %>% group_by(dtd_new) %>% 
+#   summarise(No_of_services = sum(TrainServiceIdentifier, na.rm = T)) %>% arrange(dtd_new) %>% ungroup()
+# 
+# View(NoOfService)
+# 
+# plot(NoOfService$dtd_new, NoOfService$No_of_services)
+# 
+# ## Days which have service according to original data but don't show anything based on above condition:
+# ## Hypothesis: Implies some data anomaly or wrong assumption
+# 
+# unique(Data[Data$dtd %in% unique(NoOfService[NoOfService$No_of_services== 0,]$dtd_new),]$dtd)
+# 
+# # 91 103 114 127 137 139 141 149 157 160 171 177 202 206 209 212 214 217 220 226 227 232 240 241 245 247
+# # 250 252 253 255 261 263 265 269 270 271 273 277 278 279 280 283 285 286 287 289 290 292 293 294 295 296
+# # 297 298 300 302 303 305 306 307 308 309 311 313 314 315 318 320 321 322 323 324 325 326 327 328 330 331
+# # 332 333 334 335 336 341 342 343 349 351 353
+# 
+# 
+# # Checking if 0 cumulative booking is present on every date (to check if the column starts from 0)
+# 
+# length(unique(Cleaned_Data[Cleaned_Data$inv==0,]$dtd_new))
+# 
+# # 332 days have 0 cumulative booking i.e. Inv = 0 when the first booking is done. The hypothesis is False. 
+
+```
+
+```{r Data Exploration Continuation,echo=FALSE, message=FALSE, warning=FALSE}
+## Data is at a day-train service level i.e. each service has one cumulated row at the end of the day
+
+print(paste0("Total number of bookings since day 360: ",sum(Cleaned_Data$num_bookings,na.rm = T)))
+print(paste0("Number of new ticket-types observed in data: ", length(which(Cleaned_Data$inv == 0) == T)))
+
+# Creating column which cumulates the number of tickets sold till dtd (including dtd under analysis)
+Cleaned_Data$Cumulative_booking = Cleaned_Data$num_bookings + Cleaned_Data$inv
+
+# Creating dummy month column
+Cleaned_Data$Dummy_month = ifelse(Cleaned_Data$dtd_new == 0, 1, 
+                                 ceiling(Cleaned_Data$dtd_new/30))
+Cleaned_Data$Dummy_quarter = ifelse(Cleaned_Data$dtd_new == 0, 1, 
+                                  ceiling(Cleaned_Data$dtd_new/90))
+
+cat("New Dataset: \n")
+print(head(Cleaned_Data))
+
+```
+
+# Equations and Correlations
+
+> Structural Equations:
+
+<font color = "blue">
+      <Font size = "3">
+Demand = B0 + B1(Mean Price) + B2(DTD)
+
+Supply = A0 + A1(Mean Price) + A2(Cumulative #)
+     </Font>
+  </Font>
+
+## Checking correlation between differernt variables
+
+```{r Correlation matrix, echo=FALSE, fig.height=6, fig.width=6, message=FALSE, warning=FALSE}
+corr <- round(cor(Cleaned_Data,use = "complete.obs"),2)
+print(corr)
+
+cat("Readable Matrix Visualisation \n")
+ggcorrplot(corr,type = "upper", lab = T)
+```
+
+> We will be estimating Demand curve
+
+## OLS for Demand 
+
+```{r OLS Outputs, echo=FALSE, message=FALSE, warning=FALSE}
+
+OLS_Demand_Output = lm(log(num_bookings) ~ log(mean_net_ticket_price), data = Cleaned_Data, na.omit = T)
+summary(OLS_Demand_Output)
+
+```
+
+A direct OLS result shows us that estimate for ln(Price) = -0.068; which lies within significant confidence interval.
+
+## 2SLS for Demand
+
+### Iteration 1: Price predicted by only cumulative tickets sold
+
+```{r 2SLS Output#1, echo=FALSE, message=FALSE, warning=FALSE}
+
+SLS_inv = ivreg(log(num_bookings) ~ log(mean_net_ticket_price) | inv, 
+                data = Cleaned_Data,
+                na.omit = T)
+summary(SLS_inv , diagnostics = TRUE)
+
+```
+
+Although we see some correlation between inv (cumulative sales) & net price of ticket, introducing it as IV has substantially changed the estimate for price (**-0.405 vs -0.07**). Although still relatively inelastic, prices appear to have more impact on demand than observed before.
+
+### Iteration 2: Price predicted by only date to departure (dtd)
+
+**dtd's correlation with mean price is worse than cumulative inventory.**
+Logic: With supply constrained from the beginning, the amount of train tickets available at a point in time would be in direct relationship with the total tickets sold & current price of the ticket. The number of days remaining should not directly impact the supply.
+
+
+```{r 2SLS Output#2, echo=FALSE, message=FALSE, warning=FALSE}
+
+SLS_dtd = ivreg(log(num_bookings) ~ log(mean_net_ticket_price)| dtd_new, 
+                data = Cleaned_Data,
+                na.omit = T)
+summary(SLS_dtd , diagnostics = TRUE)
+
+```
+
+The negligible correlation combined with a **positive** estimate of demand with price (wrong heuristically) should be enough to discard any dtd as an IV.
+
+### Iteration 3: Price predicted by (cumulative tickets + dtd)
+ 
+
+```{r 2SLS Output#3, echo=FALSE, message=FALSE, warning=FALSE}
+
+SLS_dtd = ivreg(log(num_bookings) ~ log(mean_net_ticket_price)| inv + dtd_new, 
+                data = Cleaned_Data,
+                na.omit = T)
+summary(SLS_dtd , diagnostics = TRUE)
+
+```
+
+### Iteration 4: Price predicted by (cumulative tickets + month + quarter flag)
+
+```{r 2SLS Output#4, echo=FALSE, message=FALSE, warning=FALSE}
+
+SLS_inv_combo = ivreg(log(num_bookings) ~ log(mean_net_ticket_price)| inv + as.factor(Dummy_quarter) + as.factor(Dummy_month), 
+                data = Cleaned_Data,
+                na.omit = T)
+summary(SLS_inv_combo , diagnostics = TRUE)
+
+```
+
+We see Sargan NULL Hypothesis (all IVs are exogenous) is rejected; This is a valid conclusion as both dummy quarter & dummy month have been included in the equation. 
+
+### Iteration 5: Price predicted by (cumulative tickets + month/quarter flag)
+
+```{r 2SLS Output#5, echo=FALSE, message=FALSE, warning=FALSE}
+
+SLS_inv_month = ivreg(log(num_bookings) ~ log(mean_net_ticket_price)| inv + as.factor(Dummy_month), 
+                data = Cleaned_Data,
+                na.omit = T)
+summary(SLS_inv_month , diagnostics = TRUE)
+
+print("=========================================================================================")
+
+SLS_inv_quarter = ivreg(log(num_bookings) ~ log(mean_net_ticket_price)| inv + as.factor(Dummy_quarter), 
+                data = Cleaned_Data,
+                na.omit = T)
+summary(SLS_inv_quarter , diagnostics = TRUE)
+
+```
+
+We observe that the estimate(s) for price are almost identical here with high degree of confidence; **but the Sargan test forces us to reject the NULL hypothesis; hence we cannot proceed with time-based variable.**
+
+# Further Testing - Iteration 2:
+
+While date to departure is a part of our demand equation(*papers to support this theory*), very weak correlation along with a positive coefficient for price when used as an information variable have & a failing of Sargon test when used with inv led us to conclude that it cannot be used in it's current form.
+
+We wanted to understand whether we can observe any trend in quarterly/monthly sales of the ticket to understand the relationship between date to departure & demand/price. 
+
+The below 3 graphs show the same:
+
+```{r Plotting graphs to better understand splitting of data, message=FALSE, warning=FALSE}
+# Plotting mean ticket price against dtd
+cat("Scatter plot of date against ticket price: \n")
+ggplot( data = Cleaned_Data, aes(x = dtd_new, y = log(mean_net_ticket_price))) + geom_point() + stat_smooth(method = "auto")
+
+# Plotting mean ticket price against dtd; split into 4 quarters to check if better trend exists
+cat("\nScatter plot of date against ticket price: \n")
+ggplot( data = Cleaned_Data, aes(x = dtd_new, y = log(mean_net_ticket_price))) + geom_point() + stat_smooth(aes(color = as.factor(Dummy_quarter)),method = "auto")
+
+cat("\nScatter plot of date against ticket price: \n")
+ggplot( data = Cleaned_Data, aes(x = dtd_new, y = log(mean_net_ticket_price))) + geom_point() + stat_smooth(aes(color = as.factor(Dummy_month)),method = "auto")
+```
+
+In the first 2 graphs, We see almost no correlation between dtd & mean ticket price. The different lines plotted based on quarters further strengthens our argument, where we observe an almost straight line across all quarters.
+
+The variation of mean price when plotted against date to departure shows some variations across the months, particularly till last 100 days before departure; we also believe that the last month has too few data-points for it to reliably demonstrate any curve. 
+Keeping the variations in mind and trains making their final decision on ticket quotas, we hypothesized that only the last 3 months (1-3 months from dtd) from departure play a key role in the demand/supply/pricing equations. Accordingly, we proceeded as below:
+
+
+```{r Linear equation with dtd months}
+
+Cleaned_Data$Dummy_month <- as.factor(Cleaned_Data$Dummy_month)
+Cleaned_Data <- as.data.table(Cleaned_Data)
+
+# One-hot encoding variables
+one_hot_data = one_hot(dt = Cleaned_Data)
+
+# Simple OLS
+OLS_Demand_Output_bucketdtd = ivreg(log(num_bookings) ~ 
+                                   log(mean_net_ticket_price) | inv +
+                                   Dummy_month_1 + 
+                                   Dummy_month_2 +
+                                   Dummy_month_3
+                                 , 
+                       data = one_hot_data)
+summary(OLS_Demand_Output_bucketdtd, diagnostics = T)
+
+```
+With the failure of Sargan test, dtd in this form becomes unrepresentable as well. So, we try to identify the threshold of date to departure, such it plays an active role in deciding price. 
+
+
+## Clustering
+
+```{r Clustering - Nikhil codes, message=FALSE, warning=FALSE }
+
+# With 
+
+# # Creating buckets
+# Cleaned_Data$dtd_new_bucket<- ifelse(Cleaned_Data$dtd_new<=7,1,ifelse(Cleaned_Data$dtd_new<=7,2,ifelse(Cleaned_Data$dtd_new<=15,3,ifelse(Cleaned_Data$dtd_new<=30,4,ifelse(Cleaned_Data$dtd_new<=60,5,ifelse(Cleaned_Data$dtd_new<=120,6,7))))))
+# 
+# # checking distribution of new bucket  
+# hist(Cleaned_Data$dtd_new_bucket)
+# hist(Cleaned_Data$dtd_new)
+# 
+# Cleaned_Data$price_ln<-log(Cleaned_Data$mean_net_ticket_price)
+# 
+# boxplot(Cleaned_Data$mean_net_ticket_price)
+# 
+# boxplot(Cleaned_Data$dtd_new)
+# boxplot(Cleaned_Data$dtd_new_bucket)
+# 
+# colnames(Cleaned_Data)
+
+#dt_OLS = lm(price_ln~dtd_new, Cleaned_Data)
+#summary(dt_OLS)
+
+
+#dt_buc_OLS = lm(price_ln~dtd_new_bucket, Cleaned_Data)
+#summary(dt_buc_OLS)
+
+#cor(Cleaned_Data$price_ln,Cleaned_Data$dtd_new)
+
+### clustering try 
+# data_cluster<-data%>%select(inv,price_ln,dtd_bucket)
+# set.seed(20)
+# clusters <- kmeans(data_cluster, 5)
+# data_cluster$cluster <- as.factor(clusters$cluster)
+# colnames(data_cluster)
+# library(lattice)
+# with(data_cluster, xyplot(price_ln ~ dtd_bucket, group=cluster))
+# with(data_cluster, xyplot(price_ln ~ inv, group=cluster))
+# with(data_cluster, xyplot(dtd_bucket ~ inv, group=cluster))
+
+
+```
+
+```{r Clsutering & dtd bucket creation}
+
+one_hot_data$price_ln <- log(one_hot_data$mean_net_ticket_price)
+data_cluster<-one_hot_data%>%select(inv,price_ln,dtd_new)
+# Removing Na's
+data_cluster <- na.omit(data_cluster)
+set.seed(20)
+clusters <- kmeans(data_cluster[,2:3], 3)
+data_cluster$cluster <- as.factor(clusters$cluster)
+colnames(data_cluster)
+library(lattice)
+with(data_cluster, xyplot(price_ln ~ dtd_new, group=cluster))
+
+```
+
+> Unable to recreate graph here
+
+## Final 2SLS - our solution after clustering 
+
+With a flag indicating whether 3 days are left from departure or not, we observe the below result: 
+
+```{r Linear equation with dtd new}
+
+one_hot_data$dtd_bucket <- ifelse(one_hot_data$dtd_new <=3, 1,0)
+
+
+# 2SLS
+OLS_Demand_Output_bucketdtd = ivreg(log(num_bookings) ~ 
+                                   log(mean_net_ticket_price) | dtd_bucket +
+                                     inv
+                                   # dtd_new_bucket_1 +
+                                   # dtd_new_bucket_2 +
+                                   # dtd_new_bucket_3 +
+                                   # dtd_new_bucket_4 +
+                                   # dtd_new_bucket_5 +
+                                   # dtd_new_bucket_6 
+                                 , 
+                       data = one_hot_data)
+summary(OLS_Demand_Output_bucketdtd, diagnostics = T)
+
+```
+
+Conclusion: ?
+
+
+# Final Iteration:
+
+> Structural Equations:
+
+<font color = "blue">
+      <Font size = "3">
+Demand = B0 + B1(Mean Price)
+
+Supply = A0 + A1(Mean Price) + A2(Cumulative #)
+
+**Reduced Equation**
+Price* = C0 + C1(Cumulative#)
+     </Font>
+  </Font>
+  
+```{r Final OLS Outputs, echo=FALSE, message=FALSE, warning=FALSE}
+
+OLS_Demand_Output = lm(log(num_bookings) ~ log(mean_net_ticket_price), data = Cleaned_Data, na.omit = T)
+summary(OLS_Demand_Output)
+
+```  
+
+
+
+

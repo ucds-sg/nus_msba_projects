@@ -1,0 +1,267 @@
+---
+title: "Economics Assignment 1 v3 - Estimating Demand Curve"
+output:
+  html_notebook:
+    number_sections: yes
+    theme: cerulean
+    toc: yes
+    toc_float: yes
+  html_document:
+    toc: yes
+---
+
+**Changes from version 2**
+
+* Clustering no longer considered - hueristic groupings for demand is being used, whereby elasticity is being calculated for equal number of transactions done over time. This allows us to understand how the demand function needs to adjust for across these groups of values 
+
+
+> Assumptions:
+1. The sales data has tickets sold to multiple locations across multiple classes of tickets. \n
+2. The mean price calculated is a function of the passenger manifesto as well (i.e. a booking can include a combination of adults + children + elderly etc.)
+
+# Reading Data & Libraries
+
+```{r Loading Libraries & Data, echo=FALSE, message=FALSE, warning=FALSE}
+
+## Reading data
+
+#Specifying location - please change it to relevant directory
+Location <-
+  "C:/Users/utkar/Desktop/MSBA/Lecture/DSC5101 - Analytics in Managerial Econ/Assignment"
+#Loading data
+Data <-
+  read.csv(paste0(Location, "/Project1Data.csv"), stringsAsFactors = F)
+
+## Installing library
+
+# check.packages function: install and load multiple R packages.
+# Check to see if packages are installed. Install them if they are not, then load them into the R session.
+
+check.packages <- function(pkg){
+  new.pkg <- pkg[!(pkg %in% installed.packages()[, "Package"])]
+  if (length(new.pkg)) 
+    install.packages(new.pkg, dependencies = TRUE)
+  sapply(pkg, require, character.only = TRUE)
+}
+
+# Usage example
+packages<-c("ggplot2","dplyr", "AER", "ggcorrplot","caret", "mltools","data.table")
+check.packages(packages)
+
+library(dplyr)
+library(ggplot2)
+library(AER)
+library(ggcorrplot)
+library(mltools)
+library(data.table)
+
+cat("View of dataset: \n")
+print(head(Data))
+```
+
+# Data Exploration & Manipulation
+
+```{r Data Exploration,echo=FALSE, message=FALSE, warning=FALSE}
+
+##### Data Cleaning ####
+
+## Checking for NULL values
+cat("Null values present in data: \n")
+print(sapply(Data, function(x) sum(is.na(x))))
+# No NA's found
+
+## Checking for duplicate rows - 
+## creating flag for all values that occur more than once
+
+Duplicate_data <- Data[!unique(Data),] # Dataset with duplicate rows
+
+Data$DuplicateFlag <- as.numeric(paste0(Data$dtd,
+                                        Data$num_bookings,
+                                        Data$mean_net_ticket_price,
+                                        Data$inv) %in% 
+                                   paste0(Duplicate_data$dtd,
+                                          Duplicate_data$num_bookings,
+                                          Duplicate_data$mean_net_ticket_price,
+                                          Duplicate_data$inv)
+)
+
+## Checking if any days are missing from dataset:
+
+#max(Data$dtd) == length(unique(Data$dtd))
+# Result: FALSE - some days are missing from data
+
+## Identifying missing days
+dtd_new <- as.data.frame(0:360)
+colnames(dtd_new) = c("dtd_new")
+
+Cleaned_Data <- merge(x = dtd_new, y = Data,by.x = "dtd_new", by.y = "dtd", all.x = T, all.y = F)
+
+##### Data Exploration ####
+
+## Days on which no data is present
+cat("Days on which no booking is made: \n")
+print(Cleaned_Data[(is.na(Cleaned_Data$num_bookings)),]$dtd_new)
+# 254 282 312 337 338 339 340 344 345 346 347 348 350, 355-360: dtd's which do not have any ticket sales
+
+## Data is at a day-train service level i.e. each service has one cumulated row at the end of the day
+
+print(paste0("Total number of bookings since day 360: ",sum(Cleaned_Data$num_bookings,na.rm = T)))
+print(paste0("Number of new ticket-types observed in data: ", length(which(Cleaned_Data$inv == 0) == T)))
+
+# Creating column which cumulates the number of tickets sold till dtd (including dtd under analysis)
+Cleaned_Data$Cumulative_booking = Cleaned_Data$num_bookings + Cleaned_Data$inv
+
+# Creating dummy month column
+Cleaned_Data$Dummy_month = ifelse(Cleaned_Data$dtd_new == 0, 1, 
+                                 ceiling(Cleaned_Data$dtd_new/30))
+Cleaned_Data$Dummy_quarter = ifelse(Cleaned_Data$dtd_new == 0, 1, 
+                                  ceiling(Cleaned_Data$dtd_new/90))
+
+cat("New Dataset: \n")
+print(head(Cleaned_Data))
+```
+
+# Equations and Correlations
+
+## Observing correlations
+
+```{r Correlation matrix, echo=FALSE, fig.height=6, fig.width=6, message=FALSE, warning=FALSE}
+corr <- round(cor(Cleaned_Data[,c("dtd_new","num_bookings", "mean_net_ticket_price", "inv")],use = "complete.obs"),2)
+print(corr)
+
+cat("Readable Matrix Visualisation \n")
+ggcorrplot(corr,type = "upper", lab = T)
+```
+
+> Structural Equations:
+
+<font color = "blue">
+      <Font size = "3">
+Demand = B0 + B1(Mean Price)
+
+Supply = A0 + A1(Mean Price) + A2(Cumulative #)
+
+**Reduced Equation**
+
+Price* = C0 + C1(Cumulative#)
+     </Font>
+  </Font>
+
+
+## OLS
+
+```{r Final OLS Outputs, echo=FALSE, message=FALSE, warning=FALSE}
+
+OLS_Demand_Output = lm(log(num_bookings) ~ log(mean_net_ticket_price), data = Cleaned_Data, na.omit = T)
+summary(OLS_Demand_Output)
+
+```  
+
+
+## 2SLS
+
+```{r 2SLS Outputs, echo=FALSE, message=FALSE, warning=FALSE}
+
+SLS_Demand_Output = ivreg(log(num_bookings) ~ log(mean_net_ticket_price) | inv, data = Cleaned_Data, na.omit = T)
+summary(SLS_Demand_Output, diagnostics = T)
+
+``` 
+
+Although we see some correlation between inv (cumulative sales) & net price of ticket, introducing it as IV has substantially changed the estimate for price (**-0.405 vs -0.06**). Still relatively inelastic, prices appear to have more impact on demand than observed before. 
+
+
+## Heuristic grouping of demand
+
+While our model above estimates the true value of price-estimate over the entire 1 year period; it is also true that there are various other external factors that impact demand/supply. Fare elasticities to areas, different geographies, ticket classes, quality of service & reliability are only some of them. A key component of the demand, though, are certain factors that change over time. **Elasticities of other modes of transport, prices of gasoline/fuel, car ownership & ease of drive, weather** are factors that influence a person's decision to purchase a train ticket as they approach the travel date. (Supply can also be adjusted to match demand at different price by changing quota of seats within trains! But we restrict our analysis to demand function) 
+
+Based on the latter factors listed above (**in bold**) (some of which could be unpredictable), one could hypothesize that the demand/supply and price relationships adjust multiple times to achieve equilibrium over the duration of a period, **as these factors cause the demand curve to shift**. As pointed above, they become increasingly prominent in influencing the purchase of a train ticket & consequently the demand function at a given time.
+
+In an open market, this shift in demand curve would cause the supply curve to adjust such that the equilibrium price remains constant. But because of limited supply of tickets available, implying a restricted movement of the supply curve, the prices adjust upward/downward. Using the underlying mechanic defined here and the influence of external factors specified above, we hope to capture the true estimate of price across multiple time-frames. 
+
+### Choosing time-frames
+
+The time-frames have been chosen in such a way that they reflect equal sales of ticket across them. This was done to ensure that there is no bias of sales across a time period of consideration. Consequently, the below buckets were obtained: 
+
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+Cleaned_Data$dtd_bucket<- ifelse(Cleaned_Data$dtd_new<=3,1,ifelse(Cleaned_Data$dtd_new<=15,2,ifelse(Cleaned_Data$dtd_new<=45,3,ifelse(Cleaned_Data$dtd_new<=120,4,5))))
+Cleaned_Data$price_ln <- log(Cleaned_Data$mean_net_ticket_price)
+
+ggplot(data = Cleaned_Data) + geom_histogram(aes(dtd_new)) + theme_bw()
+bar_plot <- Cleaned_Data%>%group_by(dtd_bucket)%>%
+  summarise(Number_bookings = sum(num_bookings, na.rm = T))
+ggplot(data = bar_plot) + geom_bar(aes(x = dtd_bucket, y = Number_bookings), stat = "identity") + theme_bw()
+
+ggplot2::ggplot(data = Cleaned_Data) + geom_point(aes(x = dtd_new, y = price_ln, color = factor(dtd_bucket))) + theme_bw()
+
+```
+
+```{r Cluster Output #1, echo=FALSE, message=FALSE, warning=FALSE}
+
+d1<-Cleaned_Data%>%filter(dtd_bucket ==1)
+m1_OLS = lm(log(num_bookings)~price_ln, data = d1)
+summary(m1_OLS)
+
+cat("Output for 2SLS: ================================================================ \n")
+m1_2sls<- ivreg(formula = log(num_bookings)~price_ln|inv, data = d1,na.omit = T)
+
+summary(m1_2sls,diagnostics = T)
+
+```
+
+
+```{r Cluster Output #2, echo=FALSE, message=FALSE, warning=FALSE}
+
+d<-Cleaned_Data%>%filter(dtd_bucket ==2)
+m_OLS = lm(log(num_bookings)~price_ln, data = d)
+summary(m_OLS)
+
+cat("Output for 2SLS: ================================================================ \n")
+m2_2sls<- ivreg(formula = log(num_bookings)~price_ln|inv, data = d,na.omit = T)
+
+summary(m2_2sls,diagnostics = T)
+
+```
+
+```{r Cluster Output #3, echo=FALSE, message=FALSE, warning=FALSE}
+
+d<-Cleaned_Data%>%filter(dtd_bucket ==3)
+m_OLS = lm(log(num_bookings)~price_ln, data = d)
+summary(m_OLS)
+
+cat("Output for 2SLS: ================================================================ \n")
+m3_2sls<- ivreg(formula = log(num_bookings)~price_ln|inv, data = d,na.omit = T)
+
+summary(m3_2sls,diagnostics = T)
+
+```
+
+```{r Cluster Output #4, echo=FALSE, message=FALSE, warning=FALSE}
+
+d<-Cleaned_Data%>%filter(dtd_bucket ==4)
+m_OLS = lm(log(num_bookings)~price_ln, data = d)
+summary(m_OLS)
+
+cat("Output for 2SLS: ================================================================ \n")
+m4_2sls<- ivreg(formula = log(num_bookings)~price_ln|inv, data = d,na.omit = T)
+
+summary(m4_2sls,diagnostics = T)
+
+```
+
+```{r Cluster Output #5, echo=FALSE, message=FALSE, warning=FALSE}
+
+d<-Cleaned_Data%>%filter(dtd_bucket ==5)
+m_OLS = lm(log(num_bookings)~price_ln, data = d)
+summary(m_OLS)
+
+cat("Output for 2SLS: ================================================================ \n")
+m5_2sls<- ivreg(formula = log(num_bookings)~price_ln|inv, data = d,na.omit = T)
+
+summary(m5_2sls,diagnostics = T)
+
+```
+
+
+
+

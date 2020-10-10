@@ -1,0 +1,111 @@
+---
+title: "Exercise 1"
+author: "Tan Hong Ming"
+date: "August 13, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Reading the data
+
+Here we read the excel file and check if the data read is correct using the head and tail function. Note we used excel preliminary to convert the .xls filetype to .csv. 
+```{r}
+married.women.df = read.csv('csvExample1.csv')
+head(married.women.df)  # check data
+tail(married.women.df)  # check data
+```
+
+## Plotting the data
+
+For illustrative purposes. Plotting is done using the "ggplot2" package. Documentation can be found at https://ggplot2.tidyverse.org/
+Note: You may need to install the package first by using "install.packages("ggplot2")".
+
+```{r}
+library(ggplot2)  # load the ggplot2 package
+ggplot(married.women.df) + geom_point(aes(ln.earn., ln.hours., colour = AGE, shape=factor(NKIDS)))
+```
+
+## Calculating the reduced forms
+
+We use the lm function to perform the least sqaures approximation, then summary function to output a summary of the estimated model.
+
+### Wage
+
+```{r}
+wage.reduced.form = lm(ln.earn. ~ NKIDS + AGE, data = married.women.df)
+summary(wage.reduced.form)
+```
+
+### Hours
+
+```{r}
+hours.reduced.form = lm(ln.hours. ~ NKIDS + AGE, data = married.women.df)
+summary(hours.reduced.form)
+```
+
+## Structural 
+
+```{r}
+structural.form = lm(ln.hours. ~ ln.earn., data = married.women.df)
+summary(structural.form)
+```
+
+## Get wage predictions 
+
+Here we use our least squares approximation model of the wage to get predicted wages. We will use the predicted wages as an instrumental variable in the second step of the two stage least squares. 
+
+```{r}
+p.df = predict(wage.reduced.form, married.women.df)
+head(p.df)
+tail(p.df)
+married.women.df$predWage = p.df  # add the predicted values as a new column in our data frame 
+```
+
+After this, we perform the second least squares approximation.
+
+```{r}
+struc.2sls.form = lm(ln.hours. ~ predWage, data = married.women.df)
+summary(struc.2sls.form)
+```
+
+## Testing for overindentification restrictions
+
+First, we use our second stage model to predict hours, and calculate the prediction error
+
+```{r}
+p.df = predict(struc.2sls.form, married.women.df)
+head(p.df)
+tail(p.df)
+married.women.df$error = married.women.df$ln.hours.- p.df
+```
+
+Next, we regress errors from second stage on the instrumental variables.
+
+```{r}
+sargan.test.model = lm(error ~ NKIDS + AGE, data = married.women.df)
+summary(sargan.test.model)
+```
+
+Now we calculate our test-statistic.
+
+```{r}
+test.stat = summary(sargan.test.model)$r.squared * nrow(married.women.df) # summary(sargan.test.model)$df[2]
+p.value = pchisq(test.stat, 1, lower.tail = FALSE)
+```
+|test statistic|p value|
+|--------------|-------|
+|`r test.stat` | `r p.value`|
+
+## Direct two stage least squares with diagnostic tests
+
+We can also perform the two stage least squares directly using R. For this, we use the ivreg() function in the AER package. 
+Note: you may need to install the package first by using "install.packages("AER")".
+
+```{r warning=FALSE, message=FALSE}
+library(AER)  # load the AER package
+direct.2sls.form = ivreg(ln.hours. ~ ln.earn.| NKIDS + AGE, data = married.women.df)
+summary(direct.2sls.form, diagnostics = TRUE)
+```

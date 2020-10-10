@@ -1,0 +1,271 @@
+---
+title: "Economics Assignment 1 v2 - Estimating Demand Curve"
+output:
+  html_notebook:
+    number_sections: yes
+    theme: cerulean
+    toc: yes
+    toc_float: yes
+  html_document:
+    toc: yes
+---
+
+**Changes from version 1**
+
+* Date to departure (dtd) no longer part of demand/supply equation.
+* Clustering considered to understand difference in behaviours exhibited by demand/supply/price across time
+
+
+> Assumptions:
+1. The sales data has tickets sold to multiple locations across multiple classes of tickets. \n
+2. The mean price calculated is a function of the passenger manifesto as well (i.e. a booking can include a combination of adults + children + elderly etc.)
+
+# Reading Data & Libraries
+
+```{r Loading Libraries & Data, echo=FALSE, message=FALSE, warning=FALSE}
+
+## Reading data
+
+#Specifying location - please change it to relevant directory
+Location <-
+  "C:/Users/utkar/Desktop/MSBA/Lecture/DSC5101 - Analytics in Managerial Econ/Assignment"
+#Loading data
+Data <-
+  read.csv(paste0(Location, "/Project1Data.csv"), stringsAsFactors = F)
+
+## Installing library
+
+# check.packages function: install and load multiple R packages.
+# Check to see if packages are installed. Install them if they are not, then load them into the R session.
+
+check.packages <- function(pkg){
+  new.pkg <- pkg[!(pkg %in% installed.packages()[, "Package"])]
+  if (length(new.pkg)) 
+    install.packages(new.pkg, dependencies = TRUE)
+  sapply(pkg, require, character.only = TRUE)
+}
+
+# Usage example
+packages<-c("ggplot2","dplyr", "AER", "ggcorrplot","caret", "mltools","data.table")
+check.packages(packages)
+
+library(dplyr)
+library(ggplot2)
+library(AER)
+library(ggcorrplot)
+library(mltools)
+library(data.table)
+
+cat("View of dataset: \n")
+print(head(Data))
+```
+
+# Data Exploration & Manipulation
+
+```{r Data Exploration,echo=FALSE, message=FALSE, warning=FALSE}
+
+##### Data Cleaning ####
+
+## Checking for NULL values
+cat("Null values present in data: \n")
+print(sapply(Data, function(x) sum(is.na(x))))
+# No NA's found
+
+## Checking for duplicate rows - 
+## creating flag for all values that occur more than once
+
+Duplicate_data <- Data[!unique(Data),] # Dataset with duplicate rows
+
+Data$DuplicateFlag <- as.numeric(paste0(Data$dtd,
+                                        Data$num_bookings,
+                                        Data$mean_net_ticket_price,
+                                        Data$inv) %in% 
+                                   paste0(Duplicate_data$dtd,
+                                          Duplicate_data$num_bookings,
+                                          Duplicate_data$mean_net_ticket_price,
+                                          Duplicate_data$inv)
+)
+
+## Checking if any days are missing from dataset:
+
+#max(Data$dtd) == length(unique(Data$dtd))
+# Result: FALSE - some days are missing from data
+
+## Identifying missing days
+dtd_new <- as.data.frame(0:360)
+colnames(dtd_new) = c("dtd_new")
+
+Cleaned_Data <- merge(x = dtd_new, y = Data,by.x = "dtd_new", by.y = "dtd", all.x = T, all.y = F)
+
+##### Data Exploration ####
+
+## Days on which no data is present
+cat("Days on which no booking is made: \n")
+print(Cleaned_Data[(is.na(Cleaned_Data$num_bookings)),]$dtd_new)
+# 254 282 312 337 338 339 340 344 345 346 347 348 350, 355-360: dtd's which do not have any ticket sales
+
+## Data is at a day-train service level i.e. each service has one cumulated row at the end of the day
+
+print(paste0("Total number of bookings since day 360: ",sum(Cleaned_Data$num_bookings,na.rm = T)))
+print(paste0("Number of new ticket-types observed in data: ", length(which(Cleaned_Data$inv == 0) == T)))
+
+# Creating column which cumulates the number of tickets sold till dtd (including dtd under analysis)
+Cleaned_Data$Cumulative_booking = Cleaned_Data$num_bookings + Cleaned_Data$inv
+
+# Creating dummy month column
+Cleaned_Data$Dummy_month = ifelse(Cleaned_Data$dtd_new == 0, 1, 
+                                 ceiling(Cleaned_Data$dtd_new/30))
+Cleaned_Data$Dummy_quarter = ifelse(Cleaned_Data$dtd_new == 0, 1, 
+                                  ceiling(Cleaned_Data$dtd_new/90))
+
+cat("New Dataset: \n")
+print(head(Cleaned_Data))
+```
+
+# Equations and Correlations
+
+## Observing correlations
+
+```{r Correlation matrix, echo=FALSE, fig.height=6, fig.width=6, message=FALSE, warning=FALSE}
+corr <- round(cor(Cleaned_Data,use = "complete.obs"),2)
+print(corr)
+
+cat("Readable Matrix Visualisation \n")
+ggcorrplot(corr,type = "upper", lab = T)
+```
+
+> Structural Equations:
+
+<font color = "blue">
+      <Font size = "3">
+Demand = B0 + B1(Mean Price)
+
+Supply = A0 + A1(Mean Price) + A2(Cumulative #)
+
+**Reduced Equation**
+
+Price* = C0 + C1(Cumulative#)
+     </Font>
+  </Font>
+
+
+## OLS
+
+```{r Final OLS Outputs, echo=FALSE, message=FALSE, warning=FALSE}
+
+OLS_Demand_Output = lm(log(num_bookings) ~ log(mean_net_ticket_price), data = Cleaned_Data, na.omit = T)
+summary(OLS_Demand_Output)
+
+```  
+
+
+## 2SLS
+
+```{r 2SLS Outputs, echo=FALSE, message=FALSE, warning=FALSE}
+
+SLS_Demand_Output = ivreg(log(num_bookings) ~ log(mean_net_ticket_price) | inv, data = Cleaned_Data, na.omit = T)
+summary(SLS_Demand_Output, diagnostics = T)
+
+``` 
+
+Although we see some correlation between inv (cumulative sales) & net price of ticket, introducing it as IV has substantially changed the estimate for price (**-0.405 vs -0.06**). Although still relatively inelastic, prices appear to have more impact on demand than observed before. 
+
+## Clustering:
+
+### 1. Clustering based on date bucket
+
+```{r Clsutering & dtd bucket creation}
+#table(Cleaned_Data$dtd_new)
+# Bucketing
+Cleaned_Data$dtd_bucket<- ifelse(Cleaned_Data$dtd_new<=3,1,ifelse(Cleaned_Data$dtd_new<=7,2,ifelse(Cleaned_Data$dtd_new<=15,3,ifelse(Cleaned_Data$dtd_new<=30,4,ifelse(Cleaned_Data$dtd_new<=60,5,ifelse(Cleaned_Data$dtd_new<=120,6,7))))))
+#Log of price
+Cleaned_Data$price_ln <- log(Cleaned_Data$mean_net_ticket_price)
+data_cluster<-Cleaned_Data%>%select(num_bookings, inv,price_ln,dtd_new, mean_net_ticket_price, dtd_bucket)
+# Removing Na's
+data_cluster <- na.omit(data_cluster)
+# Scaling values for cluster
+data_cluster$price_ln_scaled <- scale(data_cluster$price_ln)
+data_cluster$dtd_new_scaled <- scale(data_cluster$dtd_new)
+data_cluster$inv_scaled <- scale(data_cluster$inv)
+# Clustering
+#set.seed(20)
+clusters <- kmeans(data_cluster[,c("dtd_bucket","price_ln")], 4)
+data_cluster$cluster <- cbind(clusters$cluster)
+#colnames(data_cluster)
+# Visulaisation 
+library(lattice)
+with(data_cluster, xyplot(price_ln ~ dtd_new, group=cluster))
+```
+
+## 2SLS of clusters - Clustering Exercise 1
+
+### Cluster 1
+
+```{r 2SLS Cluster 1, echo=FALSE, message=FALSE, warning=FALSE}
+
+SLS_Demand_Output_Cluster1 = ivreg(log(num_bookings) ~ log(mean_net_ticket_price) | inv, data = data_cluster[data_cluster$cluster == "1",], na.omit = T)
+summary(SLS_Demand_Output_Cluster1, diagnostics = T)
+
+``` 
+### Cluster 2
+
+```{r 2SLS Cluster 2, echo=FALSE, message=FALSE, warning=FALSE}
+
+SLS_Demand_Output_Cluster2 = ivreg(log(num_bookings) ~ log(mean_net_ticket_price) | inv, data = data_cluster[data_cluster$cluster == "2",], na.omit = T)
+summary(SLS_Demand_Output_Cluster2, diagnostics = T)
+
+``` 
+### Cluster 3
+
+```{r 2SLS Cluster 3, echo=FALSE, message=FALSE, warning=FALSE}
+
+SLS_Demand_Output_Cluster3 = ivreg(log(num_bookings) ~ log(mean_net_ticket_price) | inv, data = data_cluster[data_cluster$cluster == "3",], na.omit = T)
+summary(SLS_Demand_Output_Cluster3, diagnostics = T)
+
+``` 
+
+
+## 2. Clustering based on scaled date & log price
+
+```{r , echo=FALSE, message=FALSE, warning=FALSE}
+# Clustering
+data_cluster$mean_price_scaled = scale(data_cluster$mean_net_ticket_price)
+#set.seed(20)
+clusters <- kmeans(data_cluster[,c("mean_price_scaled","dtd_new_scaled")], 2)
+data_cluster$cluster <- cbind(clusters$cluster)
+#colnames(data_cluster)
+# Visulaisation 
+library(lattice)
+with(data_cluster, xyplot(mean_net_ticket_price ~ dtd_new, group=cluster))
+```
+
+
+
+## 2SLS of clusters - Clustering Exercise 2
+
+### Cluster 1
+
+```{r 2SLS Cluster new1, echo=FALSE, message=FALSE, warning=FALSE}
+
+SLS_Demand_Output_Cluster1 = ivreg(log(num_bookings) ~ log(mean_net_ticket_price) | inv, data = data_cluster[data_cluster$cluster == "1",], na.omit = T)
+summary(SLS_Demand_Output_Cluster1, diagnostics = T)
+
+``` 
+
+### Cluster 2
+
+```{r 2SLS Cluster new2, echo=FALSE, message=FALSE, warning=FALSE}
+
+SLS_Demand_Output_Cluster1 = ivreg(log(num_bookings) ~ log(mean_net_ticket_price) | inv, data = data_cluster[data_cluster$cluster == "2",], na.omit = T)
+summary(SLS_Demand_Output_Cluster1, diagnostics = T)
+
+``` 
+### Cluster 3
+
+```{r 2SLS Cluster new3, echo=FALSE, message=FALSE, warning=FALSE}
+
+SLS_Demand_Output_Cluster1 = ivreg(log(num_bookings) ~ log(mean_net_ticket_price) | inv, data = data_cluster[data_cluster$cluster == "3",], na.omit = T)
+summary(SLS_Demand_Output_Cluster1, diagnostics = T)
+
+```
+
